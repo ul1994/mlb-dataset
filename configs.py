@@ -1,7 +1,7 @@
 
 sep = '/'
-
 maxEstSize = 1000
+CAPTURE_DIR = '_captures'
 
 active_meshes = [
 	666, # arms legs
@@ -37,7 +37,7 @@ class CocoPart:
 	LEar = 17
 	Background = 18
 
-kpoints = [
+JOINTS_SPEC = [
 	dict(
 		name='Head',
 		match=[(766, range(0, 220)), (326, range(171, 187))],
@@ -48,7 +48,7 @@ kpoints = [
 	),
 	dict(
 		name='R_Shoulder',
-		match=[(766, [692, 659]), (306, [257, 288])]
+		match=[(766, [722, 717]), (306, [257, 288])]
 	),
 	dict(
 		name='R_Elbow',
@@ -60,11 +60,11 @@ kpoints = [
 	),
 	dict(
 		name='L_Shoulder',
-		match=[(766, [722, 717]), (306, [199, 232])]
+		match=[(766, [692, 659]), (306, [199, 232])]
 	),
 	dict(
 		name='L_Elbow',
-		match=[(704, [21, 29]), (666, range(30, 50))],
+		match=[(704, [21, 29]), (666, range(35, 50))],
 	),
 	dict(
 		name='L_Hand',
@@ -76,7 +76,7 @@ kpoints = [
 	),
 	dict(
 		name='R_Knee',
-		match=[(666, range(375, 382)), (704, [380, 449])],
+		match=[(666, range(376, 382)), (704, [380, 449])],
 	),
 	dict(
 		name='R_Ankle',
