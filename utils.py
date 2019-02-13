@@ -5,7 +5,17 @@ from configs import *
 import cv2
 import math, os, sys
 from scipy.ndimage import gaussian_filter as blur
-from scipy.ndimage import uniform_filter as clrblur
+
+def gather_captures():
+	framefiles = sorted(
+		glob('_captures/*.jpg'),
+		key=lambda ent: int(ent.split(sep)[1][6:-4]))
+	hashes = list(map(lambda ent: ent.split(sep)[-1][:-4], framefiles))
+	return hashes
+
+def gather_meshes():
+	markupfiles = sorted(glob('_meshes/*.obj'))
+	return markupfiles
 
 def parsev(line, comment=True, dtype=float):
 	if comment: line = line.replace('# ', '')
@@ -90,7 +100,7 @@ def inside_triangle(p, a, b, c):
         and SameSide(p, c, a, b)
 
 def objnum(fname):
-	on = fname.split(sep)[-1].split('_')[2][1:]
+	on = int(fname.split(sep)[-1].split('_')[2][1:])
 	return on
 
 def frame_meshes(fhash, ls):
@@ -106,7 +116,7 @@ def frame_meshes(fhash, ls):
 
 font                   = cv2.FONT_HERSHEY_SIMPLEX
 bottomLeftCornerOfText = (10,500)
-fontScale              = 0.5
+fontScale              = 2.0
 fontColor              = (255,255,255)
 lineType               = 1
 
@@ -152,49 +162,19 @@ def merge_add(obj, verts, faces):
 		obj.faces += offset_faces
 	assert len(offset_faces) == len(faces)
 
+def load_capture(fhash):
+	im = cv2.imread(CAPTURE_DIR + '/%s.jpg' % fhash)
+	im = im[TOP_PAD:-BOT_PAD]
+	return im
+
 def show_capture(fhash):
 	import matplotlib.pyplot as plt
-	bg = cv2.imread(CAPTURE_DIR + '/%s.jpg' % fhash)
-	bg = bg[30:-10]
+	bg = load_capture(fhash)
 	plt.figure(figsize=(8, 8))
 	plt.imshow(cv2.cvtColor(bg, cv2.COLOR_BGR2RGB))
 	plt.show();plt.close()
 
-def draw_joints(fhash, tag, kpoints, spec=JOINTS_SPEC, colored=True):
-	import matplotlib.pyplot as plt
-
-	bg = cv2.imread(CAPTURE_DIR + '/%s.jpg' % fhash)
-	bg = bg.astype(np.float32) * 0.25
-	bg = bg[30:-10]
-	imsize = bg.shape[:2]
-
-	kpoints_overlay = np.zeros(imsize + (3,))
-	text_layer = np.zeros(imsize + (3,), dtype=np.uint8)
-
-	for kii, kp in enumerate(kpoints):
-		joint_ind, (xx, yy, zz) = kp['joint_ind'], kp['pos']
-		if yy >= imsize[0] or yy < 0 or xx >= imsize[1] or xx < 0:
-			continue
-
-		clr = CocoColors[joint_ind] if colored else [255, 255, 255]
-		kpoints_overlay[int(yy), int(xx), :] = clr
-
-		cv2.putText(text_layer, spec[joint_ind]['name'].lower(),
-			(int(xx), int(yy)),
-			font,
-			fontScale,
-			clr,
-			lineType)
-
-	kpoints_overlay = clrblur(kpoints_overlay, size=(6, 6, 1))
-	kpoints_overlay /= np.max(kpoints_overlay)
-
-	bg += kpoints_overlay * 255 * 0.75
-	bg = bg * 0.75 + text_layer.astype(np.float32) * 0.25
-	bg = bg.astype(np.uint8)
-	cv2.imwrite('_outputs/%s_%s.png' % (fhash, tag), bg)
-
-pcount = lambda val: int(val.split('_')[-1].replace('.obj', ''))
+primCount = lambda val: int(val.split('_')[-1].replace('.obj', ''))
 
 def estSize(verts):
 	wcoords = np.array([vert['world'] for vert in verts])
@@ -203,9 +183,51 @@ def estSize(verts):
 	zrange = np.max(wcoords[:, 2]) - np.min(wcoords[:, 2])
 	return xrange, yrange, zrange
 
-def draw_triangles(fhash, tag, tris, imsize=(768, 1024)):
-	canvas = np.zeros(imsize + (3,)).astype(np.uint8)
-	for entry in tris:
-		pts = entry['triangle'].reshape((-1,1,2)).astype(np.int32)
-		cv2.fillPoly(canvas,[pts], [255, 255, 255])
-	cv2.imwrite('_outputs/%s_%s.png' % (fhash, tag), canvas)
+def depth_order(tris):
+	inds = [ei for ei, entry in enumerate(tris)]
+	inds = filter(lambda ii: tris[ii]['zdepth'] < 1 and tris[ii]['zdepth'] > 0.8, inds)
+	inds = sorted(inds, key=lambda ii: tris[ii]['zdepth'])
+	zs = [tris[ii]['zdepth'] for ii in inds]
+	# print(zs[0], zs[-1])
+	zmin, zmax = min(zs), max(zs)
+	return inds, zmin, zmax
+
+def cull_skeletons(skels, bounds):
+	hh, ww = bounds
+	ls = []
+	for person in skels:
+		inb = []
+		for joint in person:
+			xx, yy, zd = joint['pos']
+			inb.append((xx >= 0 and xx < ww) and (yy >= 0 and yy < hh))
+
+		if any(inb):
+			ls.append(person)
+	return ls
+
+def skeleton_bounds(skels):
+	boxes = []
+	for person in skels:
+		xr = [100000000, 0]
+		yr = [100000000, 0]
+		for joint in person:
+			xx, yy, zd = joint['pos']
+			if xx < xr[0]: xr[0] = xx
+			if xx > xr[1]: xr[1] = xx
+			if yy < yr[0]: yr[0] = yy
+			if yy > yr[1]: yr[1] = yy
+		boxes.append([xr[0], yr[0], xr[1], yr[1]])
+	return boxes
+
+def pad_boxes(boxes, ratio=0.15, lim=20):
+	padded = []
+	for (x0, y0, xf, yf) in boxes:
+		hh = yf - y0
+		hpad = max(hh * ratio, lim)
+		ww = xf - x0
+		wpad = max(ww * ratio, lim)
+		padded.append([
+			x0 - wpad, y0 - hpad,
+			xf + wpad, yf + hpad
+		])
+	return padded

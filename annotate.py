@@ -5,12 +5,17 @@ import math, os, sys
 import numpy as np
 from configs import *
 from utils import *
+from scipy.ndimage import gaussian_filter as blur
+import json
 
 class Triangles:
 	def __init__(self):
 		pass
 
-def find_joints(tag, fhash, markupfiles, spec=JOINTS_SPEC, imsize=(768, 1024)):
+def find_joints(fhash, markupfiles=None, tag=None, spec=JOINTS_SPEC, imsize=IMAGE_SIZE, save=False):
+	if tag is None: tag = fhash
+	if markupfiles is None:
+		markupfiles = sorted(glob('_meshes/*.obj'))
 	filtered = frame_meshes(fhash, markupfiles)
 
 	found_keypoints = []
@@ -21,10 +26,12 @@ def find_joints(tag, fhash, markupfiles, spec=JOINTS_SPEC, imsize=(768, 1024)):
 	# mobj = mergedstruct()
 
 	for file_ii, fname in enumerate(filtered):
+		if primCount(fname) in BLACKLIST_MESHES:
+			continue
 		verts, faces, regs = load_markup(fname)
 
 		objname = fname.replace('frame', 'blendf').replace('meshes', 'procd')
-		notPerson = pcount(fname) not in active_meshes
+		notPerson = primCount(fname) not in active_meshes
 		xrange, yrange, zrange = estSize(verts)
 		tooBig = max(xrange, yrange, zrange) > maxEstSize
 
@@ -51,9 +58,10 @@ def find_joints(tag, fhash, markupfiles, spec=JOINTS_SPEC, imsize=(768, 1024)):
 			person_triangles.append(tri_id)
 			for kii, kp in enumerate(spec):
 				for mcount, mrange in kp['match']:
-					if type(mrange) == range:
+					# print(mrange)
+					if type(mrange) != list:
 						mrange = list(mrange)
-					if mcount == pcount(fname) and mrange[0] == fii:
+					if mcount == primCount(fname) and mrange[0] == fii:
 
 						flist = [face for _ii, face in enumerate(faces) if _ii in mrange]
 						indlist = {}
@@ -83,7 +91,9 @@ def find_joints(tag, fhash, markupfiles, spec=JOINTS_SPEC, imsize=(768, 1024)):
 							found_keypoints.append(dict(
 								joint_ind=kii,
 								pos=loc,
-								matched=kp))
+								matched=kp,
+								file=fname,
+								pcount=primCount(fname)))
 
 		sys.stdout.write('%s - %d/%d   \r' % (tag, file_ii, len(filtered)))
 		sys.stdout.flush()
@@ -94,17 +104,85 @@ def find_joints(tag, fhash, markupfiles, spec=JOINTS_SPEC, imsize=(768, 1024)):
 	result.people = [all_triangles[tid] for tid in person_triangles]
 	return found_keypoints, result
 
+def draw_joints(fhash, tag, kpoints, spec=JOINTS_SPEC, colored=True, save=False):
+	import matplotlib.pyplot as plt
+
+	bg = load_capture(fhash)
+	bg = bg.astype(np.float32)
+	imsize = bg.shape[:2]
+
+	kpoints_overlay = np.zeros((3,) + imsize).astype(np.float32)
+	text_layer = np.zeros(imsize + (3,), dtype=np.uint8)
+
+	for kii, kp in enumerate(kpoints):
+		joint_ind, (xx, yy, zz) = kp['joint_ind'], kp['pos']
+		if yy >= imsize[0] or yy < 0 or xx >= imsize[1] or xx < 0:
+			continue
+
+		clr = CocoColors[joint_ind] if colored else [255, 255, 255]
+		kpoints_overlay[:, int(yy), int(xx)] = np.array(clr)/255
+		cv2.putText(text_layer, spec[joint_ind]['name'].lower(),
+			(int(xx), int(yy)),
+			font,
+			fontScale,
+			clr,
+			lineType)
+
+
+	kpoints_overlay = np.stack([blur(dim, 8) for dim in kpoints_overlay], 2)
+	kpoints_overlay /= np.max(kpoints_overlay)
+	# plt.figure(figsize=(14,14))
+	# plt.imshow(kpoints_overlay)
+	# plt.show(); plt.close()
+	kpoints_overlay *= 255
+	canvas = bg * 0.15 \
+		+ kpoints_overlay * 0.6 \
+		+ text_layer.astype(np.float32) * 0.25
+	canvas = canvas.astype(np.uint8)
+	if save:
+		cv2.imwrite('_outputs/%s_%s.png' % (fhash, tag), bg)
+	else:
+		return cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
+
+
+def draw_triangles(fhash, tris, tag='mask', imsize=IMAGE_SIZE, save=False):
+	canvas = np.zeros(imsize + (3,)).astype(np.uint8)
+	for entry in tris:
+		pts = entry['triangle'].reshape((-1,1,2)).astype(np.int32)
+		cv2.fillPoly(canvas,[pts], [255, 255, 255])
+	if save:
+		cv2.imwrite('_outputs/%s_%s.png' % (fhash, tag), canvas)
+	else:
+		return canvas
+
+def collect_skeletons(raw_joints, skel_start = [326, 766]):
+	skels = []
+	bad = []
+	track = []
+	for ji, jnt in enumerate(raw_joints):
+		if jnt['pcount'] in skel_start \
+			and (ji == 0 or raw_joints[ji-1]['pcount'] not in skel_start):
+			if len(track) == len(JOINTS_SPEC):
+				skels.append(track)
+			else:
+				bad.append(track)
+			track = []
+		track.append(jnt)
+	if len(track) == len(JOINTS_SPEC):
+		skels.append(track)
+	return skels, bad
+
 def draw_skeletons(
-	fhash, joints, centerfunc=None, imgcopy=False,
-	outputDir='_outputs', captureDir='_captures'):
+	fhash, skels, centerfunc=None, imgcopy=False,
+	outputDir='_outputs', captureDir='_captures', skel_size=14):
 	global CocoPairsRender
 
-	canvas = cv2.imread(captureDir + '/%s.jpg' % fhash)[30:-10]
+	canvas = load_capture(fhash)
 	imsize = canvas.shape
-	assert len(joints) % 12 == 0
+	# assert len(joints) % skel_size == 0
 
-	for sii in range(0, len(joints), 12):
-		batch = joints[sii:sii+12]
+	for batch in skels:
+		# batch = joints[sii:sii+skel_size]
 		for entry in batch:
 			joint_ind, (xx, yy, zdepth) = entry['joint_ind'], entry['pos']
 			cv2.circle(
@@ -116,7 +194,7 @@ def draw_skeletons(
 			skeleton[entry['matched']['name']] = entry
 		quant = lambda name: (int(skeleton[name]['pos'][0]), int(skeleton[name]['pos'][1]))
 		for pair_order, pair in enumerate(CocoPairsRender):
-			disable_ankles = pair[0] not in [10, 13] and pair[1] not in [10, 13]
+			disable_ankles = pair[0] not in [] and pair[1] not in []
 			within_spec = pair[0] < len(JOINTS_SPEC) and pair[1] < len(JOINTS_SPEC)
 			if within_spec and disable_ankles:
 				cv2.line(
@@ -131,3 +209,48 @@ def draw_skeletons(
 
 	# cv2.imwrite('%s/%s_skeleton.jpg' % (outputDir, fhash), canvas)
 	return canvas
+
+def draw_boxes(fhash, boxes, canvas):
+	out = canvas.copy()
+	for (x0, y0, xf, yf) in boxes:
+		cv2.rectangle(out, (int(x0), int(y0)), (int(xf), int(yf)), [0, 0, 255], 3)
+	return out
+
+def draw_depth(fhash, tris, tag=None, imsize=IMAGE_SIZE, show=False):
+	import matplotlib.pyplot as plt
+	inds, zmin, zmax = depth_order(tris)
+
+	canvas = np.zeros(imsize).astype(np.uint8)
+	for ii in reversed(inds):
+		entry = tris[ii]
+		zd = entry['zdepth']
+		zd -= zmin
+		zd /= (zmax - zmin)
+		zd = zd**0.5
+		pts = entry['triangle'].reshape((-1,1,2)).astype(np.int32)
+
+		cr = (1-zd) * 0.75 + 0.25
+		cv2.fillPoly(canvas,[pts], 255 * cr)
+
+	if show:
+		plt.figure(figsize=(8, 8))
+		plt.imshow(canvas)
+		plt.show(); plt.close()
+	return canvas
+
+def save_metadata(fhash, skels, bounds, mask, droot='_data'):
+	save_format = []
+	for pi, person in enumerate(skels):
+		obj = {}
+		obj['joints'] = person
+		for ji, joint in enumerate(obj['joints']):
+			if 'matched' in joint:
+				joint['name'] = joint['matched']['name']
+				del joint['matched']
+		obj['bounds'] = bounds[pi]
+		save_format.append(obj)
+	with open('%s/%s_joints.json' % (droot, fhash), 'w') as fl:
+		json.dump(save_format, fl, indent=4)
+	# with open('%s/%s_bounds.json' % (droot, fhash), 'w') as fl:
+	# 	json.dump(bounds, fl, indent=4)
+	np.save('%s/%s_mask.npy' % (droot, fhash), mask.astype(bool))

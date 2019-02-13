@@ -3,6 +3,9 @@ sep = '/'
 maxEstSize = 1000
 CAPTURE_DIR = '_captures'
 
+IMAGE_SIZE = (1024, 1280) # h, w
+TOP_PAD, BOT_PAD = 26, 14
+
 active_meshes = [
 	666, # arms legs
 	766, # body + head
@@ -10,6 +13,11 @@ active_meshes = [
 	459, # ?
 	704, # arms legs
 	306, # torso
+	149, # feet
+]
+
+BLACKLIST_MESHES = [
+	555,
 ]
 
 # active_meshes += [
@@ -36,6 +44,14 @@ class CocoPart:
 	REar = 16
 	LEar = 17
 	Background = 18
+
+def chain(iters):
+	ls = []
+	for ent in iters:
+		if type(ent) != list:
+			ent = list(ent)
+		ls += ent
+	return ls
 
 JOINTS_SPEC = [
 	dict(
@@ -80,7 +96,7 @@ JOINTS_SPEC = [
 	),
 	dict(
 		name='R_Ankle',
-		match=[],
+		match=[(149, chain([range(92, 95), range(110, 115)]))],
 	),
 	dict(
 		name='L_Hip',
@@ -92,7 +108,7 @@ JOINTS_SPEC = [
 	),
 	dict(
 		name='L_Ankle',
-		match=[],
+		match=[(149, range(45, 50))],
 	),
 ]
 
