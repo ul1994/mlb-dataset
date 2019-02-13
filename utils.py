@@ -234,3 +234,8 @@ def pad_boxes(boxes, ratio=0.15, lim=20):
 
 def midpnt(x0, xf):
 	return abs(xf - x0) / 2 + min(xf, x0)
+
+def safe_cut(img, cutX, cutY):
+	ypad, xpad = [max(-cutY[0], 0), max(-cutX[0], 0)] # y0, x0
+	cutImg = img[max(cutY[0], 0):cutY[1], max(cutX[0], 0):cutX[1]]
+	return cutImg, xpad, ypad

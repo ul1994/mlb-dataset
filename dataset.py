@@ -25,6 +25,12 @@ class MLBDataset(Sequence):
 		self.inhalf = insize[0]//2, insize[1]//2
 		self.outratio = outratio
 		self.captures = gather_captures()
+		self.aug = iaa.Sequential([
+			iaa.Affine(
+				translate_percent=(-0.35, 0.35),
+				rotate=(-15, 15),
+				scale=(0.7, 0.8)),
+		])
 		assert len(self.captures)
 		print('MLB Dataset (Version %s)' % self.version)
 		print(' [*] Found captures: %d' % len(self.captures))
@@ -45,6 +51,7 @@ class MLBDataset(Sequence):
 	def __getitem__(self, idx):
 		refs = self.people[idx:idx + self.bsize]
 		images = []
+		masks = []
 		points = []
 		parity = []
 		for capid, pid, mpath in refs:
@@ -70,12 +77,13 @@ class MLBDataset(Sequence):
 			cutX = int(cx - rWidth/2), int(cx + rWidth/2)
 			cutY = int(cy - rHeight/2), int(cy + rHeight/2)
 
-			def fit(img, cutX, cutY):
+			def fit(img, cutX, cutY, cdim=3):
 				ypad, xpad = [max(-cutY[0], 0), max(-cutX[0], 0)] # y0, x0
 				cutImg = img[max(cutY[0], 0):cutY[1], max(cutX[0], 0):cutX[1]]
 				cutImg = cv2.resize(cutImg, (0,0), fx=hscale, fy=hscale)
+				cutImg = cutImg.reshape(cutImg.shape[:2] + (cdim,))
 				cutImg = cutImg[:self.insize[1], :self.insize[0]]
-				canvas = np.zeros((self.insize[1], self.insize[0], 3,)).astype(np.uint8)
+				canvas = np.zeros((self.insize[1], self.insize[0], cdim,)).astype(np.uint8)
 				# print(rWidth, rHeight, xpad*hscale, ypad*hscale)
 				canvas[
 					int(ypad*hscale):int(ypad*hscale)+cutImg.shape[0],
@@ -83,14 +91,24 @@ class MLBDataset(Sequence):
 				return canvas
 
 			cropIm = fit(img, cutX, cutY)
+			mask = fit(np.ones(img.shape[:2] + (1,)), cutX, cutY, cdim=1)
+			aug_result = self.aug.augment_image(
+				np.concatenate([
+					cropIm,
+					mask
+				], axis=2))
+			augIm = aug_result[...,:3]
+			augMask = aug_result[...,3:4]
 
-			images.append(cropIm)
+			images.append(augIm)
+			masks.append(augMask)
 
 		images = np.array(images).astype(np.uint8)
+		masks = np.array(masks).astype(np.uint8)
 		points = np.array(points)
 		parity = np.array(parity)
 
-		return images, (points, parity)
+		return (images, masks), (points, parity)
 
 	def on_epoch_end(self):
 		pass
