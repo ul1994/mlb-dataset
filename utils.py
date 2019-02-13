@@ -6,9 +6,9 @@ import cv2
 import math, os, sys
 from scipy.ndimage import gaussian_filter as blur
 
-def gather_captures():
+def gather_captures(dpath='_captures'):
 	framefiles = sorted(
-		glob('_captures/*.jpg'),
+		glob('%s/*.jpg' % dpath),
 		key=lambda ent: int(ent.split(sep)[1][6:-4]))
 	hashes = list(map(lambda ent: ent.split(sep)[-1][:-4], framefiles))
 	return hashes
@@ -231,3 +231,6 @@ def pad_boxes(boxes, ratio=0.15, lim=20):
 			xf + wpad, yf + hpad
 		])
 	return padded
+
+def midpnt(x0, xf):
+	return abs(xf - x0) / 2 + min(xf, x0)
