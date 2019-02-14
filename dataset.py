@@ -25,12 +25,14 @@ class MLBDataset(Sequence):
 		self.inhalf = insize[0]//2, insize[1]//2
 		self.outratio = outratio
 		self.captures = gather_captures()
-		self.aug = iaa.Sequential([
-			iaa.Affine(
-				translate_percent=(-0.35, 0.35),
-				rotate=(-15, 15),
-				scale=(0.7, 0.8)),
-		])
+		def aug_make():
+			return iaa.Sequential([
+				iaa.Affine(
+					translate_percent=(-0.35, 0.35),
+					rotate=(-15, 15),
+					scale=(0.7, 0.8)),
+			]).to_deterministic()
+		self.aug = aug_make
 		assert len(self.captures)
 		print('MLB Dataset (Version %s)' % self.version)
 		print(' [*] Found captures: %d' % len(self.captures))
@@ -77,31 +79,49 @@ class MLBDataset(Sequence):
 			cutX = int(cx - rWidth/2), int(cx + rWidth/2)
 			cutY = int(cy - rHeight/2), int(cy + rHeight/2)
 
-			def fit(img, cutX, cutY, cdim=3):
+			def fit_img(img, cutX, cutY, cdim=3, dtype=np.uint8):
 				ypad, xpad = [max(-cutY[0], 0), max(-cutX[0], 0)] # y0, x0
 				cutImg = img[max(cutY[0], 0):cutY[1], max(cutX[0], 0):cutX[1]]
 				cutImg = cv2.resize(cutImg, (0,0), fx=hscale, fy=hscale)
 				cutImg = cutImg.reshape(cutImg.shape[:2] + (cdim,))
 				cutImg = cutImg[:self.insize[1], :self.insize[0]]
-				canvas = np.zeros((self.insize[1], self.insize[0], cdim,)).astype(np.uint8)
+				canvas = np.zeros((self.insize[1], self.insize[0], cdim,)).astype(dtype)
 				# print(rWidth, rHeight, xpad*hscale, ypad*hscale)
 				canvas[
 					int(ypad*hscale):int(ypad*hscale)+cutImg.shape[0],
 					int(xpad*hscale):int(xpad*hscale)+cutImg.shape[1]] = cutImg
 				return canvas
 
-			cropIm = fit(img, cutX, cutY)
-			mask = fit(np.ones(img.shape[:2] + (1,)), cutX, cutY, cdim=1)
-			aug_result = self.aug.augment_image(
+			recenter = lambda val, fromCent, toCent, scl: (val - fromCent) * scl + toCent
+
+			augfunc = self.aug()
+			cropIm = fit_img(img, cutX, cutY)
+			mask = fit_img(np.ones(img.shape[:2] + (1,)), cutX, cutY, cdim=1)
+			kpimage = np.zeros((self.insize[1], self.insize[0], len(JOINTS_SPEC)))
+			for person in meta:
+				for joint in person['joints']:
+					jii, (imX, imY, zd) = joint['joint_ind'], joint['pos']
+					yy = recenter(imY, cy, self.insize[1]/2, hscale)
+					xx = recenter(imX, cx, self.insize[0]/2, hscale)
+					if yy >= 0 and yy < self.insize[1] and xx >= 0 and xx < self.insize[0]:
+						place_blur(kpimage[...,jii], int(xx), int(yy))
+						# kpimage[int(yy), int(xx), jii] = 1
+			# kpnts = [place_blur(dim, 12) for dim in np.transpose(kpimage, (2, 0, 1))]
+			# kpnts = [dim / np.max(dim) if np.max(dim) > 0 else dim for dim in kpnts]
+			# kpnts = np.array(kpnts).transpose((1, 2, 0))
+			aug_result = augfunc.augment_image(
 				np.concatenate([
 					cropIm,
-					mask
+					mask,
+					kpimage,
 				], axis=2))
 			augIm = aug_result[...,:3]
 			augMask = aug_result[...,3:4]
+			augPoints = aug_result[...,4:4+len(JOINTS_SPEC)]
 
 			images.append(augIm)
 			masks.append(augMask)
+			points.append(augPoints)
 
 		images = np.array(images).astype(np.uint8)
 		masks = np.array(masks).astype(np.uint8)

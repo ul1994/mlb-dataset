@@ -239,3 +239,23 @@ def safe_cut(img, cutX, cutY):
 	ypad, xpad = [max(-cutY[0], 0), max(-cutX[0], 0)] # y0, x0
 	cutImg = img[max(cutY[0], 0):cutY[1], max(cutX[0], 0):cutX[1]]
 	return cutImg, xpad, ypad
+
+def blend(points):
+	canvas = np.zeros(points.shape[:2])
+	for dim in range(len(JOINTS_SPEC)):
+		canvas[points[...,dim] > 0] = points[...,dim][points[...,dim] > 0]
+	return canvas
+
+ksize = 13
+blur_template = np.zeros((ksize, ksize))
+blur_template[int(ksize//2), int(ksize//2)] = 1
+blur_template = blur(blur_template, 3)
+blur_template /= np.max(blur_template)
+def place_blur(canvas, xx, yy):
+	global blur_template
+	ksize = blur_template.shape[0]
+	khalf = ksize//2
+	y0, x0 = max(yy - khalf, 0), max(xx - khalf, 0)
+	ky, kx = max(khalf - yy, 0), max(khalf - xx, 0)
+	spot = canvas[y0:y0+ksize-ky, x0:x0+ksize-kx]
+	spot[:, :] = blur_template.copy()[ky:ky+spot.shape[0], kx:kx+spot.shape[1]]
