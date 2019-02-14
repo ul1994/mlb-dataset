@@ -242,7 +242,7 @@ def safe_cut(img, cutX, cutY):
 
 def blend(points):
 	canvas = np.zeros(points.shape[:2])
-	for dim in range(len(JOINTS_SPEC)):
+	for dim in range(points.shape[2]):
 		canvas[points[...,dim] > 0] = points[...,dim][points[...,dim] > 0]
 	return canvas
 

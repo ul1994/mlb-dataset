@@ -18,6 +18,7 @@ class MLBDataset(Sequence):
 		# 480 / 16 = 30
 		# 256 / 16 = 16
 		insize=(480, 256), outratio=16,
+		maxPeople=5, # ignore captures with tons of ppl
 		dpath='_data'):
 
 		self.bsize = bsize
@@ -43,6 +44,8 @@ class MLBDataset(Sequence):
 			with open(metapath) as fl:
 				meta = json.load(fl)
 			assert len(meta)
+			if len(meta) > maxPeople:
+				continue
 			for ji in range(len(meta)):
 				self.people.append((ci, ji, metapath))
 		print(' [*] Contains people: %d' % len(self.people))
@@ -98,34 +101,46 @@ class MLBDataset(Sequence):
 			cropIm = fit_img(img, cutX, cutY)
 			mask = fit_img(np.ones(img.shape[:2] + (1,)), cutX, cutY, cdim=1)
 			kpimage = np.zeros((self.insize[1], self.insize[0], len(JOINTS_SPEC)))
+			pairImage = [np.zeros((self.insize[1], self.insize[0])) for _ in range(len(CocoPairs))]
 			for person in meta:
+				skeleton = {}
+				pointByName = lambda name: (int(skeleton[name][0]), int(skeleton[name][1]))
 				for joint in person['joints']:
 					jii, (imX, imY, zd) = joint['joint_ind'], joint['pos']
 					yy = recenter(imY, cy, self.insize[1]/2, hscale)
 					xx = recenter(imX, cx, self.insize[0]/2, hscale)
+					skeleton[JOINTS_SPEC[jii]['name']] = (xx, yy) # used later for pairs
 					if yy >= 0 and yy < self.insize[1] and xx >= 0 and xx < self.insize[0]:
 						place_blur(kpimage[...,jii], int(xx), int(yy))
-						# kpimage[int(yy), int(xx), jii] = 1
-			# kpnts = [place_blur(dim, 12) for dim in np.transpose(kpimage, (2, 0, 1))]
-			# kpnts = [dim / np.max(dim) if np.max(dim) > 0 else dim for dim in kpnts]
-			# kpnts = np.array(kpnts).transpose((1, 2, 0))
+				for pair_order, pair in enumerate(CocoPairs):
+					cv2.line(
+						pairImage[pair_order],
+						pointByName(JOINTS_SPEC[pair[0]]['name']),
+						pointByName(JOINTS_SPEC[pair[1]]['name']),
+						255, 3)
+			pairImage = np.transpose(pairImage, (1, 2, 0)).astype(np.float32)/255
 			aug_result = augfunc.augment_image(
 				np.concatenate([
 					cropIm,
 					mask,
 					kpimage,
+					pairImage,
 				], axis=2))
 			augIm = aug_result[...,:3]
 			augMask = aug_result[...,3:4]
 			augPoints = aug_result[...,4:4+len(JOINTS_SPEC)]
+			augPairs = aug_result[...,4+len(JOINTS_SPEC):]
 
 			images.append(augIm)
 			masks.append(augMask)
 			points.append(augPoints)
+			parity.append(augPairs)
 
 		images = np.array(images).astype(np.uint8)
 		masks = np.array(masks).astype(np.uint8)
 		points = np.array(points)
+		# for ent in parity:
+		# 	print(ent.shape)
 		parity = np.array(parity)
 
 		return (images, masks), (points, parity)
